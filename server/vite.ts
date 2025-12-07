@@ -31,8 +31,27 @@ export async function setupVite(server: Server, app: Express) {
 
   app.use(vite.middlewares);
 
+  // Handle HTML requests - catch all routes that aren't static assets
+  // This must come after vite.middlewares so Vite can handle assets first
   app.use("*", async (req, res, next) => {
+    // If Vite middleware already handled the request, skip
+    if (res.headersSent || res.writableEnded) {
+      return;
+    }
+
     const url = req.originalUrl;
+
+    // Skip API routes
+    if (url.startsWith("/api")) {
+      return next();
+    }
+
+    // Skip if this is a static asset (has file extension and not .html)
+    const pathWithoutQuery = url.split("?")[0];
+    const hasFileExtension = /\.\w+$/.test(pathWithoutQuery);
+    if (hasFileExtension && !pathWithoutQuery.endsWith(".html")) {
+      return next();
+    }
 
     try {
       const clientTemplate = path.resolve(
@@ -48,8 +67,12 @@ export async function setupVite(server: Server, app: Express) {
         `src="/src/main.tsx"`,
         `src="/src/main.tsx?v=${nanoid()}"`,
       );
-      const page = await vite.transformIndexHtml(url, template);
-      res.status(200).set({ "Content-Type": "text/html; charset=utf-8" }).send(page);
+      const html = await vite.transformIndexHtml(url, template);
+      
+      // Ensure proper headers are set for HTML content - no Content-Disposition
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.removeHeader("Content-Disposition"); // Ensure no download header
+      res.status(200).send(html);
     } catch (e) {
       vite.ssrFixStacktrace(e as Error);
       next(e);
